@@ -1,0 +1,6 @@
+.venv/
+.paddlex-cache/
+__pycache__/
+*.pyc
+pipeline/requirements-core.generated.txt
+node_modules/

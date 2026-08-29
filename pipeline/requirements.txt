@@ -1,0 +1,12 @@
+# Core (digital mode: PDF→Word fidelity conversion)
+PyMuPDF==1.28.2
+python-docx==1.2.0
+Pillow==12.3.0
+numpy==2.3.5
+pypdfium2==5.13.0
+opencv-contrib-python==4.10.0.84
+
+# Scan mode (OCR; only needed for mode=scan / auto with scanned pages).
+# Heavy (~500 MB with models); safe to install core-only and add these later.
+paddlepaddle==3.3.1
+paddleocr==3.7.0

@@ -1,0 +1,38 @@
+{
+  "name": "dsh-pdf-to-word",
+  "description": "DeepSeek Harness plugin: PDF→Word (.docx) conversion with layout fidelity (fonts/tables/images/borders), OCR scan mode, and optional multimodal LLM verification. Registers the pdf_to_word model tool.",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "pipeline/convert.py",
+    "pipeline/preview.py",
+    "pipeline/scanocr.py",
+    "pipeline/requirements.txt",
+    "scripts/setup-venv.mjs",
+    "scripts/smoke.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "setup": "node scripts/setup-venv.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.0",
+    "@deepseek-ai/dsh-llm": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

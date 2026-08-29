@@ -1,0 +1,24 @@
+# Plugin bundle patch for the profile that installs this package.
+#
+# Installed via:
+#   dsh plugin --profile <name> add <this-package>
+#
+# `dsh plugin add` appends this file to the profile's dependency graph, and
+# the dsh launcher auto-reconciles the row below into the profile's
+# `dsh.profile.bundles` array. The launcher loads the package from the
+# profile's node_modules by its `name` field below and mounts this plugin
+# into the session at boot.
+- insert:
+  - id: pdf-to-word
+    name: 'dsh-pdf-to-word'
+    config:
+      # Verification LLM route (provider/model as configured under the
+      # deployment's "Models" settings; credentials stay in dsh settings).
+      verifyProvider: local
+      verifyModel: Qwen3.8-27B
+      # Wall-clock cap for one convert.py run (ms). Long PDFs with OCR pages
+      # can take several minutes.
+      convertTimeoutMs: 1800000
+      # Python interpreter override (defaults to <package>/.venv or the
+      # PDF2WORD_PYTHON environment variable).
+      # python: C:/path/to/python.exe
