@@ -55,9 +55,11 @@ dsh plugin --profile web add dsh-pdf-to-word@https://github.com/dy395769511-star
   `dsh plugin --profile web add link:E:\2026\dsh\plugins\pdf-to-word`。
 - tarball：`pnpm pack` 出真实文件后 `dsh plugin --profile web add <tarball>`（任意位置）。
 
-### 2. 准备 Python 环境（仅一次）
+### 2. Python 环境（默认自动创建）
 
-需要 Python 3.10–3.12（管线基于 3.12 构建）。在**包目录**（本地 checkout 目录或上一步的安装目录）运行：
+需要 Python 3.10–3.12（管线基于 3.12 构建）。**通常无需手动准备**：首次调用 `pdf_to_word` 时若未找到可用解释器，插件会自动在包目录运行 `setup-venv.mjs` 创建完整 `.venv`（含 Paddle OCR，约 500MB，耗时视网络而定，本机 pip 缓存热时约 3 分钟），完成后继续本次转换，后续调用直接复用。
+
+也可以提前在**包目录**（本地 checkout 目录或上一步的安装目录）准备（更快看到进度 / 只需数字版时用 `--core`）：
 
 ```bat
 node scripts\setup-venv.mjs          :: 完整安装（含 Paddle OCR，约 500MB）
@@ -115,8 +117,9 @@ pdf_to_word(
 | `verifyModel` | `Qwen3.8-27B` | 校验 LLM 模型 |
 | `convertTimeoutMs` | `1800000` | 单次转换墙钟上限（ms） |
 | `python` | — | Python 解释器绝对路径（优先级最高） |
+| `autoSetup` | `true` | 置 `false` 禁用首次调用的 `.venv` 自动创建 |
 
-Python 解释器解析顺序：行配置 `python` → 环境变量 `PDF2WORD_PYTHON` → `<包目录>/.venv`。
+Python 解释器解析顺序：行配置 `python` → 环境变量 `PDF2WORD_PYTHON` → `<包目录>/.venv`；均未命中时自动创建（除非 `autoSetup: false`）。
 
 ## 工作原理
 
@@ -136,7 +139,7 @@ launcher 会同步清理 profile 中的 bundle 行。
 
 ## 常见问题
 
-- **“未找到 Python 解释器”**：跑 `node scripts/setup-venv.mjs`，或设 `PDF2WORD_PYTHON`。
+- **“Python 环境自动创建后仍无可用解释器”**：本机缺 Python 3.10–3.12。装好 Python 3.12 后重试（自动重建），或手动 `node scripts/setup-venv.mjs` / 设 `PDF2WORD_PYTHON`。
 - **“LLM 校验异常结束 / provider 未注册”**：检查 dsh 设置「模型」里 provider id 与行配置 `verifyProvider` 一致。
 - **扫描模式首次运行慢**：PaddleOCR 模型按 `PADDLE_PDX_CACHE_HOME` 缓存（默认 `~/.paddlex`，可用包内 `.paddlex-cache/` 或 `PADDLEX_HOME` 覆盖）。
 - **sandbox 拦截**：插件走宿主 shell 服务，按其会话沙箱策略执行；只读目录/网络受限环境请在 dsh 设置中放行对应范围。
