@@ -24,9 +24,40 @@ pdf-to-word/
 
 ## 安装
 
-### 1. 准备 Python 环境（仅一次）
+### 1. 安装到 profile
 
-需要 Python 3.10–3.12（管线基于 3.12 构建）。在包目录运行：
+**推荐：从 GitHub 直接安装**（仓库：[dy395769511-star/dsh-pdf-to-word](https://github.com/dy395769511-star/dsh-pdf-to-word)，公共仓库，无需登录）：
+
+```bat
+dsh plugin --profile web add github:dy395769511-star/dsh-pdf-to-word
+```
+
+或显式 git URL（等价）：
+
+```bat
+dsh plugin --profile web add dsh-pdf-to-word@https://github.com/dy395769511-star/dsh-pdf-to-word.git
+```
+
+- 需要本机装有 `pnpm` 与 `git`（`dsh plugin add` 是 pnpm 转发器，git 依赖经 git 拉取）。
+- 默认取 `main` 分支 HEAD；可加 `#<tag 或 commit>` 固定版本，如 `...dsh-pdf-to-word.git#v1.0.0`。
+- peer 依赖 `@deepseek-ai/dsh-tools` / `@deepseek-ai/dsh-llm`（运行时实际由 DSH 宿主提供）安装时由 pnpm 从 npm registry 自动补齐，无需额外操作。
+- `add` 完成后 launcher 自动把 `cordis.patch.yml` 中的行并入 profile 的 `dsh.profile.bundles`。
+
+安装后包位于（`%DSH_HOME%` 默认 `%USERPROFILE%\.dsh`）：
+
+```
+%DSH_HOME%\profiles\web\node_modules\dsh-pdf-to-word\
+```
+
+其他安装方式（与 GitHub 安装二选一）：
+
+- `link:<绝对路径>`：本地开发（软链，改动即时生效，需重启 dsh 加载），如
+  `dsh plugin --profile web add link:E:\2026\dsh\plugins\pdf-to-word`。
+- tarball：`pnpm pack` 出真实文件后 `dsh plugin --profile web add <tarball>`（任意位置）。
+
+### 2. 准备 Python 环境（仅一次）
+
+需要 Python 3.10–3.12（管线基于 3.12 构建）。在**包目录**（本地 checkout 目录或上一步的安装目录）运行：
 
 ```bat
 node scripts\setup-venv.mjs          :: 完整安装（含 Paddle OCR，约 500MB）
@@ -35,19 +66,15 @@ node scripts\setup-venv.mjs --core   :: 仅数字版转换（不含扫描 OCR）
 
 生成 `<包目录>/.venv`。也可用现成解释器：设环境变量 `PDF2WORD_PYTHON` 或在插件行配置 `python` 指向它（见“配置”）。
 
+> GitHub 安装的包目录位于 pnpm 存储区内，其中的 `.venv` 在 profile 重装/包更新时可能被清理。
+> 若追求稳定：把 venv 建在固定外部位置，再用 `PDF2WORD_PYTHON`（或行配置 `python`）指向它，例如
+> `C:\tools\python312\python.exe -m venv C:\tools\pdf2word-venv` 后
+> `C:\tools\pdf2word-venv\Scripts\pip install -r <包目录>\pipeline\requirements.txt`，
+> 设 `PDF2WORD_PYTHON=C:\tools\pdf2word-venv\Scripts\python.exe`。
+>
 > 本机开发捷径：若已有 venv，可直接建 junction，例如
 > `cmd /c mklink /J <包目录>\.venv E:\2026\dsh\.dsh-pdf2word\.venv`。
 > 扫描模式模型缓存同理可 junction 到 `.paddlex-cache/`（或用 `PADDLEX_HOME` 指向）。
-
-### 2. 安装到 profile
-
-```bat
-dsh plugin --profile web add link:E:\2026\dsh\plugins\pdf-to-word
-```
-
-- `link:<绝对路径>`：本地开发（软链，改动即时生效，需重启 dsh 加载）。
-- 也可 `pnpm pack` 出 tarball 后 `dsh plugin --profile web add <tarball>`（真实文件，任意位置）。
-- `add` 完成后 launcher 自动把 `cordis.patch.yml` 中的行并入 profile 的 `dsh.profile.bundles`。
 
 ### 3. 重启 dsh 生效
 
