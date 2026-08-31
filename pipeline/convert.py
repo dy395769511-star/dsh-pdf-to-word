@@ -1107,6 +1107,10 @@ def main():
         "pages": page_stats,
         "n_pages": len(pages),
         "n_scan": n_scan,
+        # 0-based page indices that went through OCR (detection in auto mode,
+        # or all pages when --mode scan), so callers always know which pages
+        # lost their native text layer
+        "scan_pages": sorted(pi for pi, v in page_modes.items() if v == "scan"),
         "renderer": renderer,
         "warnings": warnings,
     }
