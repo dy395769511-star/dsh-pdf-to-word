@@ -764,13 +764,13 @@ def convert_digital_page(doc, page, pdf_doc, region, body_size, page_idx, warnin
 # Scan (OCR) page conversion
 # ---------------------------------------------------------------------------
 def convert_scan_page(doc, page, page_img_path, body_size, page_idx, warnings, ocr_engine,
-                      body_is_global=False):
+                      body_is_global=False, state=None):
     from scanocr import analyze_page, add_scan_page
     stats = {"mode": "scan", "paragraphs": 0, "tables": 0, "images": 0, "chars": 0}
     data = analyze_page(page_img_path, ocr_engine)
     stats["chars"] = sum(len(l["text"]) for l in data["lines"])
     res = add_scan_page(doc, data, page_img_path, page.rect, body_size, page_idx, warnings,
-                        body_is_global=body_is_global)
+                        body_is_global=body_is_global, state=state)
     stats.update(res)
     return stats
 
@@ -1028,6 +1028,7 @@ def main():
 
     page_stats = []
     _scan_votes = Counter()
+    _scan_state = {}
     for idx, pi in enumerate(pages):
         if idx > 0:
             pb = doc.add_paragraph()
@@ -1038,12 +1039,15 @@ def main():
         page = pdf_doc[pi]
         mode = page_modes[pi]
         if mode == "scan":
-            # render page to image for OCR + verification
+            # render page to image for OCR + verification. JPEG (not PNG):
+            # lossless PNG keeps the watermark's crisp diagonal strokes,
+            # which fragment the detector's line boxes (cover titles vanish);
+            # JPEG's slight smoothing merges them and OCR is far more stable.
             pix = page.get_pixmap(dpi=args.dpi)
-            page_img = os.path.join(assets_dir, "ocr_p%d.png" % pi)
+            page_img = os.path.join(assets_dir, "ocr_p%d.jpg" % pi)
             pix.save(page_img)
             st = convert_scan_page(doc, page, page_img, body_size, pi, warnings, ocr_engine,
-                                   body_is_global=bool(_scan_votes))
+                                   body_is_global=bool(_scan_votes), state=_scan_state)
             try:
                 os.unlink(page_img)
             except Exception:

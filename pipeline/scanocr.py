@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Scan-mode page analysis via PaddleOCR 3.x (layout + text + table recognition).
+"""Scan-mode page analysis via PaddleOCR 3.x (PP-OCRv6 text + layout + table recognition).
 
 Result of analyze_page():
   {
@@ -16,10 +16,38 @@ import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-# Models already cached under ~/.paddlex/official_models (shared cache dir).
+# PP-OCRv6 文本模型（PaddleOCR 3.7 / PaddleX 3.7 起 v6 为官方默认系列）。
+# 默认 medium 取最高识别保真度；CPU 机器嫌慢可设
+# PDF2WORD_OCR_VARIANT=small|tiny 降档（small≈旧 v5 mobile 体量）。
+# 其余模型已缓存于 <插件>/.paddlex-cache/official_models（共享缓存目录）。
+_OCR_VARIANTS = {
+    "medium": ("PP-OCRv6_medium_det", "PP-OCRv6_medium_rec"),
+    "small": ("PP-OCRv6_small_det", "PP-OCRv6_small_rec"),
+    "tiny": ("PP-OCRv6_tiny_det", "PP-OCRv6_tiny_rec"),
+}
+_OCR_VARIANT = os.environ.get("PDF2WORD_OCR_VARIANT", "medium").strip().lower()
+if _OCR_VARIANT not in _OCR_VARIANTS:
+    _OCR_VARIANT = "medium"
+_OCR_DET_MODEL, _OCR_REC_MODEL = _OCR_VARIANTS[_OCR_VARIANT]
+
+# CPU 推理确定性：PaddlePaddle 多线程的浮点归约顺序不固定，同一 PDF 两次
+# OCR 可能得到不同的表格结构/文字（SLANeXt 尤其敏感）。固定单线程保证
+# 同输入同输出，评测分数可复现。嫌慢可设 PDF2WORD_OCR_THREADS=N（N≥2）。
+_OCR_THREADS = max(1, int(os.environ.get("PDF2WORD_OCR_THREADS", "1")))
+os.environ.setdefault("OMP_NUM_THREADS", str(_OCR_THREADS))
+os.environ.setdefault("MKL_NUM_THREADS", str(_OCR_THREADS))
+
+# CPU 推理确定性：固定线程数。多线程下 OpenMP/MKL 浮点归约顺序不固定，
+# 同一 PDF 两次 OCR 可能得到不同的表格结构（rowspan 时有时无）与个别文字，
+# 导致验证分数在 0.5 上下抖动且不可复现。默认单线程保证可复现；
+# 需要更高吞吐可设 PDF2WORD_OCR_THREADS>1（放弃确定性）。
+_OCR_THREADS = max(1, int(os.environ.get("PDF2WORD_OCR_THREADS", "1")))
+os.environ.setdefault("OMP_NUM_THREADS", str(_OCR_THREADS))
+os.environ.setdefault("MKL_NUM_THREADS", str(_OCR_THREADS))
+
 MODEL_KWARGS = {
-    "text_detection_model_name": "PP-OCRv5_mobile_det",
-    "text_recognition_model_name": "PP-OCRv5_mobile_rec",
+    "text_detection_model_name": _OCR_DET_MODEL,
+    "text_recognition_model_name": _OCR_REC_MODEL,
     "layout_detection_model_name": "PP-DocLayout_plus-L",
     "table_classification_model_name": "PP-LCNet_x1_0_table_cls",
     "wired_table_structure_recognition_model_name": "SLANeXt_wired",
@@ -222,6 +250,35 @@ def analyze_page(img_path, ocr_engine):
             "score": float(im.get("score") or 0.0),
         })
 
+    if os.environ.get("PDF2WORD_DEBUG"):
+        try:
+            sys.stderr.write("[pdf2word-debug] %s: %d lines, %d regions, %d tables\n"
+                             % (img_path, len(lines), len(regions), len(tables)))
+            for _l in lines:
+                _x0, _y0, _x1, _y1 = _l["box"]
+                _w, _h = _x1 - _x0, _y1 - _y0
+                sys.stderr.write("[pdf2word-debug]   line y=%.0f h=%.1f w=%.1f wh=%.2f sc=%.2f %r\n"
+                                 % (_y0, _h, _w, (_w / _h if _h else 0), _l["score"], _l["text"][:30]))
+            for _r in regions:
+                sys.stderr.write("[pdf2word-debug]   region %s %s sc=%.2f\n"
+                                 % (_r["label"], [round(v) for v in _r["box"]], _r["score"]))
+            for _t in tables:
+                if isinstance(_t, dict):
+                    sys.stderr.write("[pdf2word-debug]   table html cells=%d cell_boxes=%s\n"
+                                     % (_t["html"].count("<td") + _t["html"].count("<th"),
+                                        len(_t.get("cell_boxes") or [])))
+                    _grid = parse_html_table(_t["html"]) or []
+                    for _ri, _row in enumerate(_grid):
+                        sys.stderr.write("[pdf2word-debug]     r%d: %s\n" % (
+                            _ri, " | ".join(
+                                "%s%s%s" % (
+                                    ("[r%d]" % c["row"]) if c["row"] > 1 else "",
+                                    ("[c%d]" % c["col"]) if c["col"] > 1 else "",
+                                    c["text"][:14].replace("\n", " "))
+                                for c in _row)))
+        except Exception as _e:
+            sys.stderr.write("[pdf2word-debug] dump failed: %r\n" % _e)
+
     return {
         "lines": lines,
         "regions": regions,
@@ -281,6 +338,75 @@ def parse_html_table(html):
     return out
 
 
+# Diagonal watermark of the report family this plugin targets. OCR folds
+# fragments of it into table cell text ("测试要求 浙江省",
+# "HT20BJ0753 究院", "325000 电子", whole-cell diagonal runs). 友/酒/海/元
+# are common OCR misreads of diagonal watermark glyphs.
+_WM_SET = set("浙江省电子信息产品检验研究院友酒海元")
+_WM_CANON = {"浙江省电子信息产品检验研究院", "电子信息产品检验研究院"}
+# CJK words OCR sometimes splits with a stray space; the pair after the
+# space is real text, not a watermark fragment.
+_WM_SPLIT_WORDS = {"信息"}
+
+
+def _clean_watermark(text):
+    """Drop watermark fragment runs glued to table cell text.
+
+    A run of watermark characters is dropped when it touches the cell edge
+    with a space on the text side, or when it is the cell's entire content
+    (unless it is the canonical institution name, which is real content).
+    Interior runs are kept: 产品 inside 产品标识, 浙江 inside 浙江信宇科技
+    are legitimate text.
+    """
+    t = (text or "").strip()
+    if not t or not any(ch in _WM_SET for ch in t):
+        return text if text is not None else ""
+    if t in _WM_CANON:
+        return text
+    while True:
+        s = t
+        if s in _WM_CANON:
+            return s
+        if all(ch in _WM_SET or ch == " " for ch in s):
+            return ""
+        i, n = 0, len(s)
+        out = []
+        deleted = False
+        while i < n:
+            if s[i] in _WM_SET:
+                j = i
+                while j < n and s[j] in _WM_SET:
+                    j += 1
+                core = s[i:j]
+                drop = False
+                if j == n and (i == 0 or s[i - 1] == " "):
+                    # trailing fragment
+                    if len(core) >= 2 or (
+                            i < 2 or s[i - 2:i - 1] + core not in _WM_SPLIT_WORDS):
+                        drop = True
+                elif i == 0 and (j == n or s[j] == " "):
+                    # leading fragment
+                    if len(core) >= 2 or (j + 1 < n and s[j + 1] not in _WM_SET):
+                        drop = True
+                if drop:
+                    if i > 0 and s[i - 1] == " ":
+                        if out and out[-1] == " ":
+                            out.pop()  # drop the separating space too
+                    elif i == 0 and j < n and s[j] == " ":
+                        j += 1
+                    deleted = True
+                else:
+                    out.append(core)
+                i = j
+            else:
+                out.append(s[i])
+                i += 1
+        t = "".join(out)
+        if not deleted or t == s:
+            break
+    return t.strip()
+
+
 def group_paragraphs(lines, page_w, page_h):
     """Cluster OCR lines into paragraphs (with simple column detection)."""
     if not lines:
@@ -323,7 +449,7 @@ def _cluster(lines):
             lh = max(6.0, last["box"][3] - last["box"][1])
             gap = l["box"][1] - last["box"][3]
             dx = abs(l["box"][0] - last["box"][0])
-            if gap < lh * 1.4 and dx < max(24.0, lh * 2.5):
+            if gap < lh * 1.1 and dx < max(24.0, lh * 2.5):
                 para["lines"].append(l)
                 placed = True
                 break
@@ -336,8 +462,49 @@ def _line_height(l):
     return max(6.0, l["box"][3] - l["box"][1])
 
 
+def _norm_header(t):
+    return re.sub(r"\s+", "", (t or ""))
+
+
+def _drop_running_headers(free_lines, H_pt, state):
+    """Skip lines that repeat in the top strip of the page across pages.
+
+    Reports print the same running header on every content page (report
+    name, No., 共 N 页第 M, bare page number); OCR emits them as free text
+    on every page, which duplicates content and inflates the docx past the
+    PDF's page count. The first occurrence is kept; later occurrences are
+    dropped. Also drops bare page numbers in the top strip.
+    """
+    top = H_pt * 0.25
+    known = state.get("headers") or []
+    new_heads = []
+    out = []
+    for l in free_lines:
+        yc = (l["box"][1] + l["box"][3]) / 2
+        t = _norm_header(l["text"])
+        if yc <= top and t:
+            if len(t) <= 2:
+                continue
+            if re.search(r"共\s*\d+\s*页", l["text"]):
+                # Running page fraction: keep the first occurrence (it is
+                # part of the page's own content), drop the repeats.
+                if not state.get("pagefrac"):
+                    state["pagefrac"] = True
+                    out.append(l)
+                continue
+            if any(t == k or (len(t) >= 4 and len(k) >= 4 and (t in k or k in t))
+                   for k in known):
+                continue
+            new_heads.append(t)
+        out.append(l)
+    if new_heads:
+        known.extend(new_heads)
+        state["headers"] = known
+    return out
+
+
 def add_scan_page(doc, data, page_img_path, page_rect, body_size, page_idx, warnings,
-                  body_is_global=False):
+                  body_is_global=False, state=None):
     """Build docx content for one scanned page. Returns stats."""
     from docx.shared import Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -386,6 +553,44 @@ def add_scan_page(doc, data, page_img_path, page_rect, body_size, page_idx, warn
     figure_regions = region_by_kind["figure"]
     title_regions = region_by_kind["title"]
 
+    # PP-Structure sometimes reports one table region nested inside another
+    # (a sub-table inside a larger report table). The outer html already
+    # contains the inner rows, so rendering both duplicates the sub-table
+    # in the docx. Drop the nested pair (region + index-aligned html),
+    # keeping the larger box unless only the smaller one has a real grid.
+    if len(tables_html) == len(table_regions) and len(table_regions) > 1:
+        def _inside(inner, outer, tol=6.0):
+            return (outer[0] - tol <= inner[0] and outer[1] - tol <= inner[1]
+                    and inner[2] <= outer[2] + tol
+                    and inner[3] <= outer[3] + tol)
+
+        def _grid_ok(item):
+            html = item.get("html") if isinstance(item, dict) else (item or "")
+            if not html:
+                return False
+            g = parse_html_table(html)
+            return (len(g) >= 2 and max(len(r) for r in g) >= 2
+                    and sum(len(c["text"]) for r in g for c in r) >= 20)
+
+        drop = set()
+        for i, ri in enumerate(table_regions):
+            if i in drop:
+                continue
+            for j, rj in enumerate(table_regions):
+                if i == j or j in drop:
+                    continue
+                bi, bj = ri["box"], rj["box"]
+                if _inside(bi, bj):
+                    if _grid_ok(tables_html[i]) and not _grid_ok(tables_html[j]):
+                        drop.add(j)
+                    else:
+                        drop.add(i)
+                    break
+        if drop:
+            keep_idx = [k for k in range(len(table_regions)) if k not in drop]
+            table_regions = [table_regions[k] for k in keep_idx]
+            tables_html = [tables_html[k] for k in keep_idx]
+
     def in_region(box, regions_, pad=6.0):
         c = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
         for r in regions_:
@@ -396,23 +601,80 @@ def add_scan_page(doc, data, page_img_path, page_rect, body_size, page_idx, warn
     free_lines = [l for l in lines
                   if not in_region(l["box"], table_regions)
                   and not in_region(l["box"], figure_regions)]
+
+    def _slanted(box):
+        # Watermark/seal text runs diagonally across the page: its bbox is
+        # nearly square and tall, unlike a horizontal text line (wide and
+        # low). The bbox height of such a box does not reflect font size, so
+        # it poisons the body-size vote and would render as a giant garbled
+        # paragraph. Drop it from both the vote and the page text.
+        w = box[2] - box[0]
+        h = box[3] - box[1]
+        return h > 18 and w < 1.6 * h
+
+    def _noise(l):
+        # Low-confidence fragments: watermark characters, seal/signature
+        # specks. Real content lines score >= 0.7; garbage fragments < 0.5.
+        # Lone characters are stricter (seal specks, broken digits).
+        t = l["text"].strip()
+        if not t:
+            return False
+        if len(t) == 1:
+            return l["score"] < 0.8
+        return len(t) <= 3 and l["score"] < 0.5
+
+    free_lines = [l for l in free_lines if not _slanted(l["box"])]
+    free_lines = [l for l in free_lines if not _noise(l)]
+    if state is not None:
+        free_lines = _drop_running_headers(free_lines, page_rect.height, state)
     title_lines = [l for l in free_lines if in_region(l["box"], title_regions)]
     body_lines = [l for l in free_lines if not in_region(l["box"], title_regions)]
 
-    # Estimate the body size from this page's free OCR line heights (pt).
-    # Table/figure lines are excluded: cell boxes are cell sizes, not text
-    # heights. OCR boxes run ~1.2-1.4x the font size, so apply a 0.85
-    # correction before snapping to a standard size. When a document-level
-    # running mode is already established (body_is_global) it is honored;
-    # otherwise the page's own mode is used. The passed-in body_size is the
-    # fallback. Raw votes are returned so the caller can maintain the
-    # document-level mode across pages.
+    # Estimate the body size from this page's OCR line heights (pt). OCR
+    # boxes run ~1.35-1.6x the font size for small table text at ~140 dpi,
+    # so apply a 0.72 correction before snapping to a standard size (the
+    # heading-level classification still uses 0.85, below). When a
+    # document-level running mode is already established (body_is_global)
+    # it is honored, unless this page has a clear local winner from a large
+    # vote pool. The passed-in body_size is the fallback. Raw votes are
+    # returned so the caller can maintain the document-level mode across
+    # pages.
     import collections
     _size_votes = collections.Counter()
-    for l in free_lines:
-        _size_votes[nearest_std(_line_height(l) * 0.85)] += 1
-    if not body_is_global and _size_votes:
-        body_size = _size_votes.most_common(1)[0][0]
+    # Vote over ALL non-heading text lines: free lines plus the ordinary
+    # OCR lines that fall inside table regions (watermark fragments and
+    # noise excluded). In report documents the bulk of the body text lives
+    # inside tables; voting on free lines alone lets the few large
+    # cover/field lines decide the size and the table pages overflow.
+    _vote_lines = list(free_lines)
+    for r in region_by_kind["table"]:
+        _vote_lines += [l for l in lines
+                        if in_region(l["box"], [r])
+                        and not _slanted(l["box"]) and not _noise(l)]
+    for l in _vote_lines:
+        # 0.72: OCR line boxes at ~140 dpi run ~1.35-1.6x the font size
+        # (more relative padding on small table text), so the box->font
+        # correction is tighter than the 0.85 used for heading levels.
+        _size_votes[nearest_std(_line_height(l) * 0.72)] += 1
+    # 7.5/9/10.5 pt text renders nearly identically at report scale; merge
+    # the small classes so OCR box noise (±1 size step) cannot split the
+    # body-text votes and let mid-size label lines win the page mode.
+    _small = sum(_size_votes.pop(s, 0) for s in (7.5, 9.0, 10.5))
+    if _small:
+        _size_votes[9.0] = _size_votes.get(9.0, 0) + _small
+    if _size_votes:
+        _mc = _size_votes.most_common(2)
+        _top, _top_n = _mc[0]
+        _second_n = _mc[1][1] if len(_mc) > 1 else 0
+        _total = sum(_size_votes.values())
+        if not body_is_global:
+            body_size = _top
+        elif (_top_n >= 2 * _second_n and _total >= 25
+              and _top_n >= 8 and _top <= body_size):
+            # A clear local winner from a substantial pool (a dense table
+            # of small body text) refines the running estimate downward;
+            # never let a page raise the estimate (heading-heavy pages).
+            body_size = _top
     stats = {"body_size": body_size, "body_votes": dict(_size_votes),
              "paragraphs": 0, "tables": 0, "images": 0}
 
@@ -479,7 +741,11 @@ def add_scan_page(doc, data, page_img_path, page_rect, body_size, page_idx, warn
                 set_run_fonts(run, "Arial", "黑体")
                 run.font.color.rgb = RGBColor(0, 0, 0)
             else:
-                run.font.size = Pt(body_size)
+                # body_size is a document-level mode that lags while pages
+                # stream in (early pages vote from watermark-sized lines);
+                # never let a level-0 run grow past the size this line's own
+                # height indicates.
+                run.font.size = Pt(min(body_size, std))
                 from convert import set_run_fonts, map_font
                 set_run_fonts(run, "Times New Roman", "宋体")
             stats["paragraphs"] += 1
@@ -511,6 +777,51 @@ def add_scan_page(doc, data, page_img_path, page_rect, body_size, page_idx, warn
     return stats
 
 
+def _vmerge_runs(grid):
+    """Re-attach vertical merges the table recognizer flattened.
+
+    A merged label cell (序号, 客户信息, 用户文档集, ...) comes back as the
+    same short text repeated in every covered row. Consecutive identical
+    texts in the first two columns are re-merged into one rowspan so the
+    docx matches the source instead of showing a repeated label per row.
+    """
+    n_r = len(grid)
+    n_c = max(sum(c["col"] for c in row) for row in grid) if grid else 0
+
+    def _positions():
+        blocked = set()
+        pos = {}
+        for ri, row in enumerate(grid):
+            ci = 0
+            for c in row:
+                while (ri, ci) in blocked:
+                    ci += 1
+                pos[(ri, ci)] = c
+                for dr in range(c["row"]):
+                    for dc in range(c["col"]):
+                        if dr or dc:
+                            blocked.add((ri + dr, ci + dc))
+                ci += c["col"]
+        return pos
+
+    pos = _positions()
+    for ci in range(min(2, n_c)):
+        run = []
+        for ri in range(n_r + 1):  # sentinel flush at the end
+            cell = pos.get((ri, ci)) if ri < n_r else None
+            t = cell["text"] if cell else ""
+            good = (cell is not None and bool(t) and len(t) <= 6
+                    and cell["row"] == 1 and cell["col"] == 1)
+            if good and (not run or t == run[-1][2]):
+                run.append((ri, cell, t))
+            else:
+                if len(run) >= 2:
+                    run[0][1]["row"] = len(run)
+                    for ri2, c2, _t in run[1:]:
+                        grid[ri2].remove(c2)
+                run = [(ri, cell, t)] if good else []
+
+
 def _add_scan_table(doc, grid, region, page_rect, body_size, cell_boxes=None):
     from docx.shared import Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -521,6 +832,12 @@ def _add_scan_table(doc, grid, region, page_rect, body_size, cell_boxes=None):
 
     n_r = len(grid)
     n_c = max(sum(c["col"] for c in row) for row in grid)
+    # Strip watermark fragments glued onto cell text, then re-attach the
+    # vertical merges the recognizer flattened (repeated label columns).
+    for row in grid:
+        for c in row:
+            c["text"] = _clean_watermark(c["text"])
+    _vmerge_runs(grid)
     tbl = doc.add_table(rows=n_r, cols=n_c)
     tbl.style = "Table Grid"
     tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -544,6 +861,17 @@ def _add_scan_table(doc, grid, region, page_rect, body_size, cell_boxes=None):
                 else:
                     groups.append([x])
             bounds = [sum(g) / len(g) for g in groups]
+            # The structure-recognition grid and the cell boxes occasionally
+            # disagree on the column count (e.g. one interior grid line is
+            # detected as two, adding a spurious boundary). When there are
+            # too many boundaries, merge the tightest adjacent gap
+            # repeatedly until the counts match instead of falling back to
+            # uniform widths.
+            while len(bounds) > n_c + 1:
+                gaps = [(bounds[i + 1] - bounds[i], i)
+                        for i in range(len(bounds) - 1)]
+                _gap, i = min(gaps)
+                bounds = bounds[:i] + [(bounds[i] + bounds[i + 1]) / 2.0] + bounds[i + 2:]
             if len(bounds) == n_c + 1:
                 cand = [bounds[i + 1] - bounds[i] for i in range(n_c)]
                 if all(w > 0 for w in cand) and abs(sum(cand) - w_pt) < w_pt * 0.3:

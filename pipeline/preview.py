@@ -220,11 +220,26 @@ def dump_docx(docx_path):
             except Exception:
                 grid_w = []
             rows = []
-            for row in t.rows:
+            seen_tc = {}
+            for ri, row in enumerate(t.rows):
                 cells = []
                 prev_tc = None
                 for cell in row.cells:
                     tc = cell._tc
+                    if cells and tc is prev_tc:
+                        # gridSpan: same cell object repeats per covered grid col
+                        cells[-1]["span"] += 1
+                        prev_tc = tc
+                        continue
+                    if tc in seen_tc:
+                        # vMerge continuation: row.cells repeats the head
+                        # cell's object for every spanned row; mark it as
+                        # covered so the renderer redraws one box over the
+                        # whole span instead of repeating the text.
+                        cells.append({"text": "", "size_pt": None, "bold": False,
+                                      "span": 1, "vcont": True})
+                        prev_tc = tc
+                        continue
                     ctexts = []
                     csize = None
                     cbold = False
@@ -240,10 +255,7 @@ def dump_docx(docx_path):
                                 cbold = True
                         if csize:
                             break
-                    if cells and tc is prev_tc:
-                        # gridSpan: same cell object repeats per covered grid col
-                        cells[-1]["span"] += 1
-                        continue
+                    seen_tc[tc] = ri
                     cells.append({"text": "\n".join(ctexts), "size_pt": csize,
                                   "bold": cbold, "span": 1})
                     prev_tc = tc
@@ -552,7 +564,8 @@ def render_docx_pages(docx_path, assets_dir, dpi=140):
                         lines.extend(t for t, _ in wrap_line(piece, fnt, cw, draw))
                     crow.append({"lines": lines or [""], "size_pt": size_pt,
                                  "bold": bool(c.get("bold")), "real_bold": fnt_rb,
-                                 "x": ci, "span": span})
+                                 "x": ci, "span": span,
+                                 "vcont": bool(c.get("vcont"))})
                     ci += span
                 cell_lines.append(crow)
             # row heights
@@ -563,14 +576,45 @@ def render_docx_pages(docx_path, assets_dir, dpi=140):
                 row_hs.append(max(18, int(maxn * (maxsz * s * 1.3 + 6))))
             total_h = sum(row_hs) + 4
             ensure(min(total_h, 60))
+            y_tops = []
+            row_page = []
             for ri in range(len(rows)):
                 h = row_hs[ri]
                 if y + h > mt + usable_h:
                     new_page()
-                page_text(" | ".join(c["lines"][0] for c in cell_lines[ri] if c["lines"]))
+                y_tops.append(y)
+                row_page.append(len(pages) - 1)
+                page_text(" | ".join(c["lines"][0] for c in cell_lines[ri]
+                                     if c["lines"] and not c.get("vcont")))
                 for c in cell_lines[ri]:
                     w = sum(col_ws[c["x"]:c["x"] + c["span"]])
                     x = ml + sum(col_ws[:c["x"]])
+                    if c.get("vcont"):
+                        # Vertical-merge continuation: walk up to the head row
+                        # and redraw one box over the whole span (the white
+                        # fill erases row lines crossing the span). The fill
+                        # also covers the head cell's text, so redraw it.
+                        r0 = ri - 1
+                        while r0 >= 0 and not any(
+                                e["x"] <= c["x"] < e["x"] + e["span"]
+                                and not e.get("vcont") for e in cell_lines[r0]):
+                            r0 -= 1
+                        if r0 >= 0 and row_page[r0] == row_page[ri]:
+                            draw.rectangle([x, y_tops[r0], x + w, y + h],
+                                           fill="#FFFFFF", outline="#000000", width=1)
+                            head = next((e for e in cell_lines[r0]
+                                         if e["x"] <= c["x"] < e["x"] + e["span"]
+                                         and not e.get("vcont")), None)
+                            if head is not None:
+                                fnt, _rb = load_font("宋体", head["size_pt"] * s,
+                                                     head["bold"])
+                                sw = 1 if (head["bold"] and not head.get("real_bold")) else 0
+                                ty = y_tops[r0] + 3
+                                for tl in head["lines"]:
+                                    draw.text((x + 4, ty), tl, font=fnt, fill="#000000",
+                                              stroke_width=sw, stroke_fill="#000000")
+                                    ty += head["size_pt"] * s * 1.3
+                        continue
                     draw.rectangle([x, y, x + w, y + h], outline="#000000", width=1)
                     fnt, _rb = load_font("宋体", c["size_pt"] * s, c["bold"])
                     sw = 1 if (c["bold"] and not c.get("real_bold")) else 0
@@ -599,5 +643,5 @@ if __name__ == "__main__":
     ap.add_argument("--dpi", type=int, default=140)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    n = render_docx_pages(a.docx, a.out, a.dpi)
+    n, _page_texts = render_docx_pages(a.docx, a.out, a.dpi)
     print("rendered %d pages" % n)

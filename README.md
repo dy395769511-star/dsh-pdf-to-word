@@ -15,7 +15,7 @@ pdf-to-word/
 ├── pipeline/
 │   ├── convert.py          # 主转换（数字版保真：字号/表格/图片/边框/背景）
 │   ├── preview.py          # DOCX 预览渲染（供校验比对的 word_pN.jpg）
-│   ├── scanocr.py          # 扫描页 OCR（PaddleOCR 3.x）
+│   ├── scanocr.py          # 扫描页 OCR（PaddleOCR 3.x / PP-OCRv6）
 │   └── requirements.txt    # Python 依赖
 ├── scripts/
 │   └── setup-venv.mjs      # 建立 .venv 并安装依赖（node scripts/setup-venv.mjs）
