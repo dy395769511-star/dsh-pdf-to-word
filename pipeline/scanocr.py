@@ -722,6 +722,17 @@ def add_scan_page(doc, data, page_img_path, page_rect, body_size, page_idx, warn
                 level = 2
             elif std >= 13 and is_title:
                 level = 3
+            # "Label：value" field lines (e.g. cover lines like 客户（Customer）：...
+            # 产品名称（PUT）：...) can carry slightly taller OCR boxes and slip
+            # into the H2 tier; they are form fields, never headings. Only
+            # demote when real text follows the colon, so headings like
+            # "四、第三方软件测试报告" keep their style.
+            if level:
+                for _colon in ("\uff1a", ":"):
+                    if _colon in text:
+                        if text.split(_colon, 1)[1].strip():
+                            level = 0
+                        break
             p = doc.add_paragraph()
             if level:
                 try:

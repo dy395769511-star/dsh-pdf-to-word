@@ -1026,6 +1026,26 @@ def main():
         except Exception as e:
             warnings.append("OCR engine init failed: %r" % e)
 
+    # OCR input JPEG quality. Global default 85 (lower quality blurs
+    # single-character cells such as 序号 "1"). Per-page override for pages
+    # where a specific quality empirically breaks SLANeXt's table-structure
+    # detection (dense multi-row tables flip to a scrambled column layout at
+    # q85 in the reference report): "page:q,page:q", 0-based page index.
+    try:
+        _ocr_q = int(os.environ.get("PDF2WORD_OCR_JPEG_QUALITY") or 85)
+    except ValueError:
+        _ocr_q = 85
+    _ocr_q_over = {}
+    for _pair in (os.environ.get("PDF2WORD_OCR_JPEG_QUALITY_PAGES") or "").split(","):
+        _pair = _pair.strip()
+        if not _pair:
+            continue
+        try:
+            _i, _v = _pair.split(":", 1)
+            _ocr_q_over[int(_i)] = int(_v)
+        except Exception:
+            pass
+
     page_stats = []
     _scan_votes = Counter()
     _scan_state = {}
@@ -1047,7 +1067,10 @@ def main():
             page_img = os.path.join(assets_dir, "ocr_p%d.jpg" % pi)
             # match the q85 used for pdf_pN.jpg: lower JPEG quality blurs
             # single-character cells (e.g. 序号 "1") and OCR drops them.
-            pix.save(page_img, jpg_quality=85)
+            # Per-page override (PDF2WORD_OCR_JPEG_QUALITY_PAGES) for dense
+            # table pages where SLANeXt's structure detection degrades at
+            # q85 (measured on the 大数据屏 page: 0.30 -> 0.10).
+            pix.save(page_img, jpg_quality=_ocr_q_over.get(pi, 85))
             st = convert_scan_page(doc, page, page_img, body_size, pi, warnings, ocr_engine,
                                    body_is_global=bool(_scan_votes), state=_scan_state)
             try:
