@@ -143,4 +143,5 @@ launcher 会同步清理 profile 中的 bundle 行。
 - **“LLM 校验异常结束 / provider 未注册”**：检查 dsh 设置「模型」里 provider id 与行配置 `verifyProvider` 一致。
 - **扫描模式首次运行慢**：PaddleOCR 模型按 `PADDLE_PDX_CACHE_HOME` 缓存（默认 `~/.paddlex`，可用包内 `.paddlex-cache/` 或 `PADDLEX_HOME` 覆盖）。
 - **扫描 OCR 结果不稳定（同一 PDF 两次转换表格结构不同）**：多线程 CPU 推理的浮点归约顺序不确定。管线默认单线程（`PDF2WORD_OCR_THREADS=1`）保证可复现；如需提速可设 `PDF2WORD_OCR_THREADS` 为核数，代价是结果可能轻微抖动（个别 rowspan/空单元格）。
+- **单字符单元格丢失（如表头“序号”列的“1”）或个别密集表格页结构退化**：OCR 输入 JPEG 质量影响 SLANeXt 的结构识别。默认 q85（过低会糊掉单字符格）；可用 `PDF2WORD_OCR_JPEG_QUALITY` 调全局质量，`PDF2WORD_OCR_JPEG_QUALITY_PAGES="6:75"` 按 0 基页号对个别退化页覆盖（实测某密集表格页在 q85 下列结构错乱，回退 q75 后恢复）。
 - **sandbox 拦截**：插件走宿主 shell 服务，按其会话沙箱策略执行；只读目录/网络受限环境请在 dsh 设置中放行对应范围。
