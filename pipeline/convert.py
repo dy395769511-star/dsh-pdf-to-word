@@ -1045,7 +1045,9 @@ def main():
             # JPEG's slight smoothing merges them and OCR is far more stable.
             pix = page.get_pixmap(dpi=args.dpi)
             page_img = os.path.join(assets_dir, "ocr_p%d.jpg" % pi)
-            pix.save(page_img)
+            # match the q85 used for pdf_pN.jpg: lower JPEG quality blurs
+            # single-character cells (e.g. 序号 "1") and OCR drops them.
+            pix.save(page_img, jpg_quality=85)
             st = convert_scan_page(doc, page, page_img, body_size, pi, warnings, ocr_engine,
                                    body_is_global=bool(_scan_votes), state=_scan_state)
             try:
