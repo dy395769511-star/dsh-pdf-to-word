@@ -142,4 +142,5 @@ launcher 会同步清理 profile 中的 bundle 行。
 - **“Python 环境自动创建后仍无可用解释器”**：本机缺 Python 3.10–3.12。装好 Python 3.12 后重试（自动重建），或手动 `node scripts/setup-venv.mjs` / 设 `PDF2WORD_PYTHON`。
 - **“LLM 校验异常结束 / provider 未注册”**：检查 dsh 设置「模型」里 provider id 与行配置 `verifyProvider` 一致。
 - **扫描模式首次运行慢**：PaddleOCR 模型按 `PADDLE_PDX_CACHE_HOME` 缓存（默认 `~/.paddlex`，可用包内 `.paddlex-cache/` 或 `PADDLEX_HOME` 覆盖）。
+- **扫描 OCR 结果不稳定（同一 PDF 两次转换表格结构不同）**：多线程 CPU 推理的浮点归约顺序不确定。管线默认单线程（`PDF2WORD_OCR_THREADS=1`）保证可复现；如需提速可设 `PDF2WORD_OCR_THREADS` 为核数，代价是结果可能轻微抖动（个别 rowspan/空单元格）。
 - **sandbox 拦截**：插件走宿主 shell 服务，按其会话沙箱策略执行；只读目录/网络受限环境请在 dsh 设置中放行对应范围。
