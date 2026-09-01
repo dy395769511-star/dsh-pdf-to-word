@@ -1026,6 +1026,12 @@ def main():
         except Exception as e:
             warnings.append("OCR engine init failed: %r" % e)
 
+    if n_scan and ocr_engine is None:
+        print("PDF2WORD_JSON " + json.dumps(
+            {"ok": False, "error": "OCR engine init failed: %s" % (warnings[-1] if warnings else "unknown")},
+            ensure_ascii=True))
+        return 1
+
     # OCR input JPEG quality. Global default 85 (lower quality blurs
     # single-character cells such as 序号 "1"). Per-page override for pages
     # where a specific quality empirically breaks SLANeXt's table-structure
