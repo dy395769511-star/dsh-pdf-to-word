@@ -14,7 +14,8 @@ pdf-to-word/
 │   └── index.js            # 静态 Cordis 插件入口（注册 pdf_to_word 工具）
 ├── pipeline/
 │   ├── convert.py          # 主转换（数字版保真：字号/表格/图片/边框/背景）
-│   ├── preview.py          # DOCX 预览渲染（供校验比对的 word_pN.jpg）
+│   ├── fixdocx.py          # 表格结构 dump/apply（verify→fix 闭环的确定性执行器）
+│   ├── preview.py          # DOCX 预览渲染（供校验比对的 word_pN.jpg；修复循环重渲染）
 │   ├── scanocr.py          # 扫描页 OCR（PaddleOCR 3.x / PP-OCRv6）
 │   └── requirements.txt    # Python 依赖
 ├── scripts/
@@ -95,12 +96,13 @@ pdf_to_word(
   mode?,            # auto(默认) | digital | scan
   verify?,          # 默认 true，是否 LLM 校验
   maxVerifyPages?,  # 默认 8
+  maxFixRounds?,    # 默认 2，verify→fix 修复轮次上限（0=禁用，上限 3）
   outPath?          # 输出 .docx 路径，默认与 PDF 同目录同名
 )
 ```
 
-返回：`docx` 输出路径、页数/扫描页数/渲染器、`scan_pages`（auto 模式逐页判定的扫描页 0 基页号列表，非空即含扫描件）、总体判定（match + 平均分）、逐页判定、警告；
-校验报告写到 `<pdf 所在目录>/pdf2w_assets/verify_report.md`。
+返回：`docx` 输出路径、页数/扫描页数/渲染器、`scan_pages`（auto 模式逐页判定的扫描页 0 基页号列表，非空即含扫描件）、总体判定（match + 平均分）、逐页判定、`fix`（`{rounds, applied, stillOpen}`，修复循环统计）、警告；
+校验报告写到 `<pdf 所在目录>/pdf2w_assets/verify_report.md`，修复方案落盘 `pdf2w_assets/fix_plan_rN.json`。
 
 ### 判定规则
 
@@ -108,6 +110,21 @@ pdf_to_word(
 - 逐页：模型输出 JSON `{match, score, issues[], note}`；`score ≥ 0.75 且无 high 问题` ⇒ 该页通过。
 - 总体：**所有已校验页均通过**才算通过（平均分仅作展示）。
 - Word 重排导致的分页差异属正常，不计问题。
+
+## verify→fix 闭环（v1.1）
+
+校验发现 medium+ 表格结构问题时自动进入修复循环（需要 llm + attachments 服务；`maxFixRounds=0` 可禁用）：
+
+1. **选页**：取问题最重的 ≤3 页（high 优先 → 分数低 → 页序）。
+2. **dump**：`fixdocx.py dump <docx>` 导出全部表格结构（grid 列宽、每行单元格的文本/跨列/纵向合并），作为模型的精确结构视图。
+3. **plan**：多模态 LLM（PDF 原图 + Word 预览图 + 结构转储 + 问题清单）输出严格 JSON 动作方案，动作限于 7 类白名单表格操作：
+   `setGridSpan` / `setVMerge` / `setCellText` / `insertCell` / `removeCell` / `cloneRow` / `removeRow`；
+   硬约束：终态每行跨列和 == grid 列数、vMerge continue 上方必有 restart/continue、只动问题相关单元格、文本必须取自 PDF。
+4. **apply**：`fixdocx.py apply <docx> --plan <json> --in-place` 确定性执行——逐操作在深拷贝草稿上校验，全部应用后做全局不变式门禁（行跨列和、vMerge 良构、文件可重开）；**任一失败则整表回滚、不落盘**；成功则写 `.pre_fix.docx` 备份。
+5. **re-verify**：`preview.py` 重渲染 Word 预览，**仅复检本轮受影响页**，更新逐页/总体判定。
+6. **循环**：至无 medium+ 问题残留、模型无可修复方案、无动作成功应用、回滚或达到 `maxFixRounds`（默认 2，上限 3）。
+
+修复循环段落写入 `verify_report.md`；每轮方案留存 `pdf2w_assets/fix_plan_rN.json` 供审计/重放。
 
 ## 配置（cordis.patch.yml 行 `config:`）
 
